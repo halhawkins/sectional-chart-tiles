@@ -1,0 +1,7 @@
+rasterio
+shapely
+geopandas
+numpy
+tqdm
+mercantile
+Pillow
