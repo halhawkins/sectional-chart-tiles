@@ -18,30 +18,58 @@ This repository contains scripts to process and reproject GeoTIFF files using sh
    cd yourrepository
 2. **Load dependencies**:
    ```bash
-   pip install rasterio geopandas shapely numpy mercantile Pillow
-### Generatate Tiles for Sectional Charts
+   pip install -r ./requirements.txt
+### Quick Start: Generatate Tiles for Sectional Charts
 
  1. **Go to [FAA VFR Raster Charts]** (https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/)
  2. **Get all current charts for the U.S. and Territories.** This is about 3GB zipped. 
- 3. **Extract all the .tif files from the archive into the './rawtiff' folder.**
+ 3. **Extract all the files from the archive into the './rawtiff' folder.**
  4. **Run extract_sectional_charts.py to remove map collars**
       ```bash
+      cd ./scripts
       py ./extract_sectional_charts.py
       ```
-      This will take a long time. For GeoTiffs this size, expect it to take about 5 to 10 minutes per file. This step will remove the map surrounds and save the clipped output in the './clipped' directory. 
+      This will take a long time. For GeoTiffs this size. This step will remove the map surrounds and save the clipped output in the './clipped' directory. 
+      This step will also generate a json file with metadata in the './clipped' directory
  5. **Run reproject_tif.py to convert GeoTiff projection to EPSG:3857 (WGS 84)**
       ```bash
       py ./reproject_tif.py
       ```
-    This also takes some time but less than the previous step. Expect 3 to 5 minutes per file. The output is saved in the './reprojected' directory. This step ensures that the output will be using the proper projection for web maps. 
+    This also takes some time but less than the previous step. The output is saved in the './reprojected' directory. This step ensures that the output will be using the proper projection for web maps. 
  6. **Generate the map tiles**
       ```bash
-      py ./make_tiles
+      py ./make_slippy_tiles
       ```
       This will take the files in the './reprojected' directory and generates map tiles in 'XYZ' format saving the results in a directory './tiles' (./tiles/{z}/{x}/{y}).
       You can also specify zoom levels to generate and the tile size (height=width=tile_size in pixels) on the command line: 
       ```bash
-      py ./make_tiles --zoom_start 1 --zoom_end 18 --tile_size 512
+      py ./make_tiles --zoom_start 8 --zoom_end 11 --tile_size 512
+### Scripts ###
+#### Preparing the Data ####
+ 1. Download the sectional chart data from https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/ . There is an option for downloading the entire set in one zip archive which should save time. In the zip archive(s) there are .tif files which contain the raster data in GeoTIFF format, TFW files, workdfiles, which contains data to place and orient the raster data in geographic space, and finally an .htm file which contains metadata regarding the geographic data in the GeoTIFF. Extract all these files into a source directory. In the ./scripts directory, you can extract all these files into a subdirectory named, 'rawtiff' or you can use another directory but you will pass the path to the script on the command line.
+ 2. Verify that you have the collection of shapefiles included in the repository in .scripts/shapefiles. There should be four files for each of the raw tif files you extracted. There will be a .dbf, a .prj, a .shp, and a .shx for each sectional map. If you are missing shapefiles, you will not be able to use the script to extract the maps from the surrounds. If there are shapefiles missing, you may need to use QGIS desktop application to create polygon shapefiles to trim the map surrounds. Make sure you get copies for all four files you generate. 
+#### Remove the Map Surrounds ####
+ 1. In the ./scripts directory run the script, extract_sectional_charts.py:
+   ```bash
+   py ./extract_sectional_charts.py [--source_dir <source directory>] [--target_dir <target directory>]
+   ```
+   When the process is completed the target directory should have a one tif file for each sectional chart in the source directory but with the border collars removed.
+#### Reproject the Clipped GeoTIFFs ####
+ 1. The GeoTIFFs we use to create the tiles will need to use to correcct projection in order to work correctly for web mapping. You will run the reproject_tif script to accomplish this. By default we use EPSG:3857. If for some reason a different projection is needed, you may pass it as a parameter on the command line:
+ ```bash
+ py ./reproject_tif.py [--input_dir <source directory>] [--output_dir <target directory>] [--target_crs <EPSG:3857>] [--nodata_value <color index>]
+ ```
+#### Generate the Map Tiles ####
+ 1. XYZ tiles, or "slippy tiles" are a widely used method for rendering and displaying maps on the web. This approach involves breaking down a large map into smaller, manageable square tiles that can be loaded and displayed dynamically as the user pans and zooms. Here’s a quick overview of how they work:
+  - **Tiling**: The map is divided into square tiles, ours are 512x512 pixels in size but are more often 256x256. Each tile represents a specific geographic area at a particular zoom level.
+  - **Zoom Levels**: The map is pre-rendered at multiple zoom levels, where each level increases the map’s detail and doubles the number of tiles required. Zoom level 0 contains a single tile representing the entire world, zoom level 1 has 4 tiles, zoom level 2 has 16 tiles, and so on.
+  - **Tile Coordinates**: Each tile is identified by a unique set of coordinates (x, y) and the zoom level (z). The coordinates correspond to the position of the tile within the grid at the given zoom level.
+  - **Loading and Display**: As the user navigates the map, only the tiles visible within the viewport are requested and loaded from the server. This ensures efficient use of bandwidth and resources, providing a seamless and responsive user experience.
+  - **Caching**: Tiles are often cached on the client side, allowing for quick reloading and reduced server load when the user revisits previously viewed areas.
+ 2. For our purposes, we will only render zoom levels 8 through 11. In our Leaflet application, we will set the minNativeZoom to 8 and maxNativeZoom to 11. This will result a in more accurate display at lower zoom levels and reduce the amount of time and storage space required to generate the tiles.
+ ```bash
+ py ./make_slippy_tiles.py [--start_zoom <zoom>] [--end_zoom <zoom>] [--input_dir <source directory>] [--output_dir <target directory>]
+ ```
 ## Troubleshooting
 ### Check the results after each step
    #### If a raw tiff fails extract_sectional_charts step
