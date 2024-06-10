@@ -14,8 +14,8 @@ This repository contains scripts to process and reproject GeoTIFF files using sh
 
 1. **Clone the repository or download the scripts**:
    ```bash
-   git clone https://github.com/yourusername/yourrepository.git
-   cd yourrepository
+   git clone https://github.com/halhawkins/sectional-chart-tiles.git sectiles
+   cd sectiles
 2. **Load dependencies**:
    ```bash
    pip install -r ./requirements.txt
