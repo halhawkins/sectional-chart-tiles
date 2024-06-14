@@ -1,6 +1,6 @@
-# GeoTIFF Processing Scripts
+# Processing FAA Sectional Chart GeoTIFFs Scripts
 
-This repository contains scripts to process and reproject GeoTIFF files using shapefiles and to process the output as XYZ tiles for web mapping.
+This repository contains scripts to process and reproject VFR sectional chart GeoTIFF files using shapefiles and to process the output as XYZ tiles for web mapping.
 
 ## Setup Instructions
 
@@ -44,6 +44,14 @@ This repository contains scripts to process and reproject GeoTIFF files using sh
       You can also specify zoom levels to generate and the tile size (height=width=tile_size in pixels) on the command line: 
       ```bash
       py ./make_tiles --zoom_start 8 --zoom_end 11 --tile_size 512
+      ```
+ 7. **Copy the tiles to the bucket**
+     if you are using AWS S3 to host these tiles, you should use the CLI if possible to copy the files to the bucket. ( --dryrun simulates the command. Remove this before running it for real.)
+     ```bash
+     aws s3 cp .\ s3://your-bucket-name --dryrun 
+     ```
+#### Suggestions ####
+For the Sectional Chart maps, my recommendation is to render tiles only for zoom levels 8-11 and in the Leaflet TileLayer, set the minNativeZoom and maxNativeZoom to those values respectively. Since there is no visible details at the loweest of these zoom levels anyway, this will avoid a great deal of processing time and decrease the amount of time needed to upload the tiles. Rendering tiles at greater zoom levels would add no additional detail and so would take a great deal of time with no benefit.
 ### Scripts ###
 #### Preparing the Data ####
  1. Download the sectional chart data from https://www.faa.gov/air_traffic/flight_info/aeronav/digital_products/vfr/ . There is an option for downloading the entire set in one zip archive which should save time. In the zip archive(s) there are .tif files which contain the raster data in GeoTIFF format, TFW files, workdfiles, which contains data to place and orient the raster data in geographic space, and finally an .htm file which contains metadata regarding the geographic data in the GeoTIFF. Extract all these files into a source directory. In the ./scripts directory, you can extract all these files into a subdirectory named, 'rawtiff' or you can use another directory but you will pass the path to the script on the command line.
@@ -68,7 +76,13 @@ This repository contains scripts to process and reproject GeoTIFF files using sh
   - **Caching**: Tiles are often cached on the client side, allowing for quick reloading and reduced server load when the user revisits previously viewed areas.
  2. For our purposes, we will only render zoom levels 8 through 11. In our Leaflet application, we will set the minNativeZoom to 8 and maxNativeZoom to 11. This will result a in more accurate display at lower zoom levels and reduce the amount of time and storage space required to generate the tiles.
  ```bash
- py ./make_slippy_tiles.py [--start_zoom <zoom>] [--end_zoom <zoom>] [--input_dir <source directory>] [--output_dir <target directory>]
+ py ./make_slippy_tiles.py [--start_zoom <zoom>] [--end_zoom <zoom>] [--input_dir <source directory>] [--output_dir <target directory>] [--zoom <zoom level for regeneration>] [--tile_x <tile column for regeneration>] [--tile_y <tile row for regeneration>]
+ #to generate all tiles from zoom 5 through 11
+ py ./make_slippy_tiles.py
+ #to generate all tiles for zoom level 11
+ py ./make_slippy_tiles.py --start_zoom 11 --end_zoom 11
+ #to regenerate individual tile at zoom 11 column 564 row 126
+ py ./make_slippy_tiles.py --zoom 11 --tile_x 564 --tile_y 126
  ```
 ## Troubleshooting
 ### Check the results after each step

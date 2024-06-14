@@ -11,10 +11,14 @@ from decimal import Decimal, getcontext
 from tqdm import tqdm
 import argparse
 import shutil
+import logging
 
 # Set precision for Decimal calculations
 getcontext().prec = 20
 target_crs = 'EPSG:4326'
+
+# Configure logging
+logging.basicConfig(filename='tiles.log', level=logging.INFO, format='%(asctime)s %(levelname)s:%(message)s')
 
 # Find all GeoTIFF files in the directory
 def find_all_geotiffs(directory):
@@ -30,15 +34,11 @@ def process_tile(tile_info):
     lock_path = tile_path + '.lock'
     
     with FileLock(lock_path):
-        # Initialize an empty image for the tile
         tile_img = Image.new('RGBA', (512, 512), (0, 0, 0, 0))
         
         for geotiff_path in geotiff_paths:
             with rasterio.open(geotiff_path) as dataset:
-                # Get the tile bounds in EPSG:4326
                 tile_bounds = mercantile.bounds(tile)
-                
-                # Calculate the affine transform for the dataset to tile conversion
                 dst_transform = from_bounds(
                     float(Decimal(tile_bounds.west)),
                     float(Decimal(tile_bounds.south)),
@@ -47,10 +47,8 @@ def process_tile(tile_info):
                     512, 512
                 )
                 
-                # Create an empty array for each color channel
                 reprojected_data = np.zeros((dataset.count, 512, 512), dtype=np.uint8)
-                
-                # Reproject the data to the tile coordinates for each color channel
+                # logging.info(f"Dataset {dataset}")
                 for i in range(dataset.count):
                     reprojected_band = np.zeros((512, 512), dtype=np.float32)
                     reproject(
@@ -62,32 +60,60 @@ def process_tile(tile_info):
                         dst_crs=target_crs,
                         resampling=Resampling.bilinear
                     )
-                    # Normalize the reprojected data to the range [0, 255] for each channel
                     min_val = np.min(reprojected_band)
                     max_val = np.max(reprojected_band)
+                    
                     if min_val != max_val:
                         reprojected_band = ((reprojected_band - min_val) / (max_val - min_val) * 255).astype(np.uint8)
                     else:
                         reprojected_band = np.zeros_like(reprojected_band, dtype=np.uint8)
                     
                     reprojected_data[i] = reprojected_band
+                    # logging.info(f"Reprojected band {i} x={tile.x} y={tile.y} {reprojected_band}")
                 
-                # Combine the reprojected data into an RGBA image
-                if dataset.count == 3:
-                    reprojected_image = Image.merge("RGB", [Image.fromarray(reprojected_data[i], 'L') for i in range(3)]).convert('RGBA')
-                elif dataset.count == 4:
+                # Check if alpha band is present and valid
+                if dataset.count == 4 and not np.all(reprojected_data[3] == 0):
                     reprojected_image = Image.merge("RGBA", [Image.fromarray(reprojected_data[i], 'L') for i in range(4)])
                 else:
-                    raise ValueError("Unsupported number of channels")
+                    # Create alpha channel based on non-zero values in RGB channels
+                    alpha_channel = (np.max(reprojected_data[:3], axis=0) > 0).astype(np.uint8) * 255
+                    reprojected_image = Image.merge("RGBA", [Image.fromarray(reprojected_data[i], 'L') for i in range(3)] + [Image.fromarray(alpha_channel, 'L')])
                 
                 # Create a mask to handle transparency
-                mask = Image.fromarray((np.max(reprojected_data, axis=0) > 0).astype(np.uint8) * 255, 'L')
+                mask = Image.fromarray((np.max(reprojected_data[:3], axis=0) > 0).astype(np.uint8) * 255, 'L')
                 
                 # Merge the reprojected image with the existing tile image
                 tile_img.paste(reprojected_image, (0, 0), mask)
-        
-        # Save the tile
-        tile_img.save(tile_path)
+
+        # Debugging: Check tile data before saving
+        data = np.array(tile_img)
+        alpha_channel = data[:, :, 3]
+        # print(f"Tile {tile_path} alpha channel unique values: {np.unique(alpha_channel)}")
+
+        # Check if the entire tile is transparent
+        if np.all(alpha_channel == 0):
+            logging.info(f"Tile {tile_path} is fully transparent.")
+        else:
+            tile_img.save(tile_path)
+            logging.info(f"Saved tile: {tile_path}")
+
+# Function to regenerate specific tiles or columns
+def regenerate_tiles(geotiff_paths, zoom_level, tile_x, tile_y, tiles_dir):
+    tile_infos = []
+    if tile_y is not None:
+        # Regenerate specific tile
+        tile = mercantile.Tile(x=tile_x, y=tile_y, z=zoom_level)
+        tile_infos.append((geotiff_paths, zoom_level, tile, tiles_dir))
+    else:
+        # Regenerate entire column
+        for tile_y in range(0, 2**zoom_level):
+            tile = mercantile.Tile(x=tile_x, y=tile_y, z=zoom_level)
+            tile_infos.append((geotiff_paths, zoom_level, tile, tiles_dir))
+    
+    # Use multiprocessing to process tiles in parallel
+    with Pool(cpu_count()) as pool:
+        for _ in tqdm(pool.imap_unordered(process_tile, tile_infos), total=len(tile_infos), desc=f'Regenerating tiles at zoom level {zoom_level}, column {tile_x}'):
+            pass
 
 # Read the GeoTIFF file and create slippy tiles
 def create_slippy_tiles(geotiff_paths, zoom_level_start, zoom_level_end, tiles_dir):
@@ -124,11 +150,14 @@ def create_slippy_tiles(geotiff_paths, zoom_level_start, zoom_level_end, tiles_d
 # Main function
 def main():
     # Argument parser setup
-    parser = argparse.ArgumentParser(description='Generate slippy tiles from GeoTIFF files.')
+    parser = argparse.ArgumentParser(description='Generate or regenerate slippy tiles from GeoTIFF files.')
     parser.add_argument('--start_zoom', type=int, default=8, help='Start zoom level (default: 8)')
     parser.add_argument('--end_zoom', type=int, default=11, help='End zoom level (default: 11)')
     parser.add_argument('--input_dir', type=str, default='./reprojected', help='Input directory containing GeoTIFF files (default: ./reprojected)')
     parser.add_argument('--output_dir', type=str, default='./tiles', help='Output directory for generated tiles (default: ./tiles)')
+    parser.add_argument('--zoom', type=int, help='Zoom level for regeneration')
+    parser.add_argument('--tile_x', type=int, help='Tile column for regeneration')
+    parser.add_argument('--tile_y', type=int, help='Tile row for regeneration (optional)')
     args = parser.parse_args()
 
     # Ensure output directory exists
@@ -140,9 +169,13 @@ def main():
         print(f"No GeoTIFF files found in the '{args.input_dir}' directory.")
         return
     
-    # Create slippy tiles
-    create_slippy_tiles(geotiff_paths, args.start_zoom, args.end_zoom, args.output_dir)
-    print("Slippy tiles created.")
+    if args.zoom is not None and args.tile_x is not None:
+        # Regenerate specific tiles or columns
+        regenerate_tiles(geotiff_paths, args.zoom, args.tile_x, args.tile_y, args.output_dir)
+    else:
+        # Create slippy tiles
+        create_slippy_tiles(geotiff_paths, args.start_zoom, args.end_zoom, args.output_dir)
+        print("Slippy tiles created.")
     
     # Copy JSON file from input directory to output directory
     json_file = os.path.join(args.input_dir, 'update_metadata.json')
